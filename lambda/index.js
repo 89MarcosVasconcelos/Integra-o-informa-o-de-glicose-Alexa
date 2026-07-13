@@ -51,26 +51,42 @@ function getGlucoseData() {
 function buildGlucoseSpeech(data) {
   const { sgv, direction_text: directionText, minutes_ago: minutesAgo } = data;
 
-  let tempoFala;
-  if (minutesAgo <= 1) {
-    tempoFala = 'agora mesmo';
-  } else {
-    tempoFala = `há ${minutesAgo} minutos`;
-  }
+  const tempoFala = minutesAgo <= 1 ? 'agora mesmo' : `há ${minutesAgo} minutos`;
 
-  return `Sua glicose ${tempoFala} estava em ${sgv} miligramas por decilitro. Tendência: ${directionText}.`;
+  return `${tempoFala}, ${sgv} miligramas por decilitro. Tendência: ${directionText}.`;
+}
+
+async function sendProgressiveResponse(handlerInput, speech) {
+  try {
+    const directiveServiceClient = handlerInput.serviceClientFactory.getDirectiveServiceClient();
+    await directiveServiceClient.enqueue({
+      header: { requestId: handlerInput.requestEnvelope.request.requestId },
+      directive: { type: 'VoicePlayer.Speak', speech },
+    });
+  } catch (err) {
+    console.error('Erro ao enviar resposta progressiva:', err);
+  }
 }
 
 const LaunchRequestHandler = {
   canHandle(handlerInput) {
     return Alexa.getRequestType(handlerInput.requestEnvelope) === 'LaunchRequest';
   },
-  handle(handlerInput) {
-    const speakOutput = 'Bem-vindo à skill Glicose Agora. Pergunte "qual a glicose agora" para saber a última leitura.';
-    return handlerInput.responseBuilder
-      .speak(speakOutput)
-      .reprompt(speakOutput)
-      .getResponse();
+  async handle(handlerInput) {
+    await sendProgressiveResponse(handlerInput, 'Consultando.');
+    try {
+      const data = await getGlucoseData();
+      return handlerInput.responseBuilder
+        .speak(buildGlucoseSpeech(data))
+        .withShouldEndSession(true)
+        .getResponse();
+    } catch (err) {
+      console.error('Erro ao consultar glicose:', err);
+      return handlerInput.responseBuilder
+        .speak('Não consegui consultar a glicose agora. Tente novamente em alguns instantes.')
+        .withShouldEndSession(true)
+        .getResponse();
+    }
   },
 };
 
@@ -82,17 +98,18 @@ const GlicoseAgoraIntentHandler = {
     );
   },
   async handle(handlerInput) {
+    await sendProgressiveResponse(handlerInput, 'Consultando.');
     try {
       const data = await getGlucoseData();
-      const speakOutput = buildGlucoseSpeech(data);
       return handlerInput.responseBuilder
-        .speak(speakOutput)
+        .speak(buildGlucoseSpeech(data))
+        .withShouldEndSession(true)
         .getResponse();
     } catch (err) {
       console.error('Erro ao consultar glicose:', err);
-      const speakOutput = 'Não consegui consultar sua glicose agora. Tente novamente em alguns instantes.';
       return handlerInput.responseBuilder
-        .speak(speakOutput)
+        .speak('Não consegui consultar a glicose agora. Tente novamente em alguns instantes.')
+        .withShouldEndSession(true)
         .getResponse();
     }
   },
@@ -106,7 +123,7 @@ const HelpIntentHandler = {
     );
   },
   handle(handlerInput) {
-    const speakOutput = 'Você pode perguntar "qual a glicose agora" para saber a última leitura registrada no Nightscout.';
+    const speakOutput = 'Diga "glicose agora" para saber a última leitura registrada no Nightscout.';
     return handlerInput.responseBuilder
       .speak(speakOutput)
       .reprompt(speakOutput)
@@ -176,4 +193,5 @@ exports.handler = Alexa.SkillBuilders.custom()
     IntentReflectorHandler,
   )
   .addErrorHandlers(ErrorHandler)
+  .withApiClient(new Alexa.DefaultApiClient())
   .lambda();
